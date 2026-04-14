@@ -157,12 +157,11 @@ if [[ "$1" == "--auto" ]]; then
     AUTO_MODE=true
 fi
 
-if [[ "$AUTO_MODE" == true ]]; then
-    # Use AI CLI (Claude Code, Codex, or OpenClaw) to resolve conflicts
-    log "Running AI agent to resolve conflicts..."
+# Always try AI resolution first (both manual and auto modes)
+log "Running AI agent to resolve conflicts..."
 
-    # Create prompt for AI
-    AI_PROMPT="The upstream OpenClaw repository has $BEHIND_COUNT new commits that conflict with our Sunsetting AI customizations.
+# Create prompt for AI
+AI_PROMPT="The upstream OpenClaw repository has $BEHIND_COUNT new commits that conflict with our Sunsetting AI customizations.
 
 Conflicted files:
 $CONFLICTED_FILES
@@ -182,58 +181,51 @@ Please resolve these merge conflicts by:
 
 Report back with a summary of changes made."
 
-    # Try AI tools in order of preference: Claude Code → Codex → OpenClaw CLI
-    RESOLVED=false
+# Try AI tools in order of preference: Claude Code → Codex → OpenClaw CLI
+RESOLVED=false
 
-    if command -v claude &> /dev/null && [[ "$RESOLVED" == false ]]; then
-        log "Using Claude Code for conflict resolution..."
-        if echo "$AI_PROMPT" | claude --non-interactive; then
-            RESOLVED=true
-            log "Claude Code resolved conflicts successfully"
-        else
-            warn "Claude Code resolution failed, trying next tool..."
-        fi
-    fi
-
-    if command -v codex &> /dev/null && [[ "$RESOLVED" == false ]]; then
-        log "Using Codex for conflict resolution..."
-        if echo "$AI_PROMPT" | codex --non-interactive; then
-            RESOLVED=true
-            log "Codex resolved conflicts successfully"
-        else
-            warn "Codex resolution failed, trying next tool..."
-        fi
-    fi
-
-    if command -v ./openclaw.mjs &> /dev/null && [[ "$RESOLVED" == false ]]; then
-        log "Using OpenClaw agent for conflict resolution..."
-        PROMPT_FILE=$(mktemp)
-        echo "$AI_PROMPT" > "$PROMPT_FILE"
-        if ./openclaw.mjs message send --file "$PROMPT_FILE" --agent default --thinking high; then
-            RESOLVED=true
-            log "OpenClaw agent resolved conflicts successfully"
-        else
-            warn "OpenClaw agent resolution failed"
-        fi
-        rm -f "$PROMPT_FILE"
-    fi
-
-    if [[ "$RESOLVED" == false ]]; then
-        warn "All AI tools failed. Falling back to manual mode."
-        AUTO_MODE=false
+if command -v claude &> /dev/null && [[ "$RESOLVED" == false ]]; then
+    log "Using Claude Code for conflict resolution..."
+    if echo "$AI_PROMPT" | claude --non-interactive; then
+        RESOLVED=true
+        log "Claude Code resolved conflicts successfully"
+    else
+        warn "Claude Code resolution failed, trying next tool..."
     fi
 fi
 
-if [[ "$AUTO_MODE" == false ]]; then
-    # Manual / interactive mode
-    warn "Please resolve conflicts manually."
+if command -v codex &> /dev/null && [[ "$RESOLVED" == false ]]; then
+    log "Using Codex for conflict resolution..."
+    if echo "$AI_PROMPT" | codex --non-interactive; then
+        RESOLVED=true
+        log "Codex resolved conflicts successfully"
+    else
+        warn "Codex resolution failed, trying next tool..."
+    fi
+fi
+
+if command -v ./openclaw.mjs &> /dev/null && [[ "$RESOLVED" == false ]]; then
+    log "Using OpenClaw agent for conflict resolution..."
+    PROMPT_FILE=$(mktemp)
+    echo "$AI_PROMPT" > "$PROMPT_FILE"
+    if ./openclaw.mjs message send --file "$PROMPT_FILE" --agent default --thinking high; then
+        RESOLVED=true
+        log "OpenClaw agent resolved conflicts successfully"
+    else
+        warn "OpenClaw agent resolution failed"
+    fi
+    rm -f "$PROMPT_FILE"
+fi
+
+if [[ "$RESOLVED" == false ]]; then
+    warn "All AI tools failed. Please resolve conflicts manually."
     echo ""
     echo "Options:"
     echo "  1. Use your editor to resolve conflicts in the files listed above"
     echo "  2. Use Claude Code in your IDE to help resolve conflicts"
-    echo "  3. Or run this command to invoke AI assistance:"
+    echo "  3. Or run the AI helper script:"
     echo ""
-    echo "     openclaw message send --file $CONFLICT_REPORT \"Resolve these merge conflicts\""
+    echo "     ./scripts/ai-resolve-conflicts.sh"
     echo ""
     echo "After resolving conflicts, run:"
     echo "  git add <resolved-files>"
