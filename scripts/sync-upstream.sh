@@ -158,38 +158,68 @@ if [[ "$1" == "--auto" ]]; then
 fi
 
 if [[ "$AUTO_MODE" == true ]]; then
-    # Use Claude Code CLI to resolve conflicts
-    log "Running Claude Code to resolve conflicts..."
+    # Use AI CLI (Claude Code, Codex, or OpenClaw) to resolve conflicts
+    log "Running AI agent to resolve conflicts..."
 
-    # Create prompt for Claude
-    CLAUDE_PROMPT="The upstream OpenClaw repository has $BEHIND_COUNT new commits that conflict with our Sunsetting AI customizations.
+    # Create prompt for AI
+    AI_PROMPT="The upstream OpenClaw repository has $BEHIND_COUNT new commits that conflict with our Sunsetting AI customizations.
 
 Conflicted files:
 $CONFLICTED_FILES
 
 Please resolve these merge conflicts by:
-1. Reading each conflicted file
-2. Understanding both the upstream changes and our customizations
-3. Merging them intelligently, preferring to keep Sunsetting branding/customizations
-4. Ensuring the code compiles and tests pass
-5. Marking conflicts as resolved
-
-After resolving all conflicts:
-- Run: git add <resolved-files>
-- Run: git rebase --continue
-- Verify the build works: pnpm build
+1. Reading each conflicted file to understand both sides
+2. Understanding the upstream changes (after >>>>>>> upstream/main)
+3. Understanding our Sunsetting customizations (after <<<<<<< HEAD)
+4. Merging them intelligently:
+   - ALWAYS keep Sunsetting branding (name, logo color #FF4B44, UI text)
+   - ALWAYS keep [SUNSETTING] prefixed features
+   - Adopt upstream bug fixes and improvements
+5. Remove all conflict markers (<<<<<<, =======, >>>>>>>)
+6. Mark conflicts as resolved with: git add <resolved-files>
+7. Continue the rebase with: git rebase --continue
+8. Verify the build works: pnpm build
 
 Report back with a summary of changes made."
 
-    # Check if openclaw CLI is available for agent invocation
-    if command -v openclaw &> /dev/null; then
-        log "Invoking OpenClaw agent for conflict resolution..."
-        echo "$CLAUDE_PROMPT" | openclaw message send --agent conflict-resolver --thinking high || {
-            warn "Agent resolution failed. Falling back to manual mode."
-            AUTO_MODE=false
-        }
-    else
-        warn "OpenClaw CLI not found. Cannot auto-resolve. Falling back to manual mode."
+    # Try AI tools in order of preference: Claude Code → Codex → OpenClaw CLI
+    RESOLVED=false
+
+    if command -v claude &> /dev/null && [[ "$RESOLVED" == false ]]; then
+        log "Using Claude Code for conflict resolution..."
+        if echo "$AI_PROMPT" | claude --non-interactive; then
+            RESOLVED=true
+            log "Claude Code resolved conflicts successfully"
+        else
+            warn "Claude Code resolution failed, trying next tool..."
+        fi
+    fi
+
+    if command -v codex &> /dev/null && [[ "$RESOLVED" == false ]]; then
+        log "Using Codex for conflict resolution..."
+        if echo "$AI_PROMPT" | codex --non-interactive; then
+            RESOLVED=true
+            log "Codex resolved conflicts successfully"
+        else
+            warn "Codex resolution failed, trying next tool..."
+        fi
+    fi
+
+    if command -v ./openclaw.mjs &> /dev/null && [[ "$RESOLVED" == false ]]; then
+        log "Using OpenClaw agent for conflict resolution..."
+        PROMPT_FILE=$(mktemp)
+        echo "$AI_PROMPT" > "$PROMPT_FILE"
+        if ./openclaw.mjs message send --file "$PROMPT_FILE" --agent default --thinking high; then
+            RESOLVED=true
+            log "OpenClaw agent resolved conflicts successfully"
+        else
+            warn "OpenClaw agent resolution failed"
+        fi
+        rm -f "$PROMPT_FILE"
+    fi
+
+    if [[ "$RESOLVED" == false ]]; then
+        warn "All AI tools failed. Falling back to manual mode."
         AUTO_MODE=false
     fi
 fi
