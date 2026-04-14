@@ -146,7 +146,45 @@ git status >> "$CONFLICT_REPORT"
 log "Conflict report saved: $CONFLICT_REPORT"
 
 ###############################################################################
-# 6. AI-Assisted Resolution (Claude Code / Codex Agent)
+# 6. Automatic Resolution for Known Safe Conflicts
+###############################################################################
+
+log "Checking for auto-resolvable conflicts..."
+
+# Auto-resolve .bundle.hash conflicts (always take upstream)
+if echo "$CONFLICTED_FILES" | grep -q "^src/canvas-host/a2ui/.bundle.hash$"; then
+    log "Auto-resolving .bundle.hash (generated file, taking upstream version)..."
+    git checkout --theirs src/canvas-host/a2ui/.bundle.hash
+    git add src/canvas-host/a2ui/.bundle.hash
+
+    # Remove from conflicted files list
+    CONFLICTED_FILES=$(echo "$CONFLICTED_FILES" | grep -v "^src/canvas-host/a2ui/.bundle.hash$")
+fi
+
+# If all conflicts resolved, continue rebase
+if [[ -z "$CONFLICTED_FILES" ]]; then
+    log "All conflicts auto-resolved! Continuing rebase..."
+    if git rebase --continue; then
+        log "✅ Rebase successful after auto-resolution!"
+
+        # Verify build works
+        log "Verifying build after conflict resolution..."
+        if pnpm build; then
+            log "✅ Build successful!"
+            log "Sync complete!"
+            exit 0
+        else
+            error "Build failed after conflict resolution."
+            exit 1
+        fi
+    else
+        error "Rebase --continue failed."
+        exit 1
+    fi
+fi
+
+###############################################################################
+# 7. AI-Assisted Resolution (Claude Code / Codex Agent)
 ###############################################################################
 
 log "Attempting AI-assisted conflict resolution..."
@@ -240,7 +278,7 @@ if [[ "$RESOLVED" == false ]]; then
 fi
 
 ###############################################################################
-# 7. Verify resolution
+# 8. Verify resolution
 ###############################################################################
 
 # Check if rebase is still in progress
@@ -260,7 +298,7 @@ else
 fi
 
 ###############################################################################
-# 8. Summary
+# 9. Summary
 ###############################################################################
 
 log "========================================="
