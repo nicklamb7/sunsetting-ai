@@ -186,17 +186,20 @@ RESOLVED=false
 
 if command -v claude &> /dev/null && [[ "$RESOLVED" == false ]]; then
     log "Using Claude Code for conflict resolution..."
-    if echo "$AI_PROMPT" | claude --non-interactive; then
+    PROMPT_FILE=$(mktemp)
+    echo "$AI_PROMPT" > "$PROMPT_FILE"
+    if claude "$PROMPT_FILE"; then
         RESOLVED=true
         log "Claude Code resolved conflicts successfully"
     else
         warn "Claude Code resolution failed, trying next tool..."
     fi
+    rm -f "$PROMPT_FILE"
 fi
 
 if command -v codex &> /dev/null && [[ "$RESOLVED" == false ]]; then
     log "Using Codex for conflict resolution..."
-    if echo "$AI_PROMPT" | codex --non-interactive; then
+    if echo "$AI_PROMPT" | codex; then
         RESOLVED=true
         log "Codex resolved conflicts successfully"
     else
@@ -204,11 +207,12 @@ if command -v codex &> /dev/null && [[ "$RESOLVED" == false ]]; then
     fi
 fi
 
-if command -v ./openclaw.mjs &> /dev/null && [[ "$RESOLVED" == false ]]; then
+if [[ -f "./openclaw.mjs" ]] && [[ "$RESOLVED" == false ]]; then
     log "Using OpenClaw agent for conflict resolution..."
     PROMPT_FILE=$(mktemp)
     echo "$AI_PROMPT" > "$PROMPT_FILE"
-    if ./openclaw.mjs message send --file "$PROMPT_FILE" --agent default --thinking high; then
+    # Ensure we use Node 22 for OpenClaw CLI
+    if source ~/.nvm/nvm.sh && nvm use 22 &> /dev/null && ./openclaw.mjs message send --file "$PROMPT_FILE" --agent default --thinking high; then
         RESOLVED=true
         log "OpenClaw agent resolved conflicts successfully"
     else
