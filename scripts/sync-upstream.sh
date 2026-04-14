@@ -186,15 +186,12 @@ RESOLVED=false
 
 if command -v claude &> /dev/null && [[ "$RESOLVED" == false ]]; then
     log "Using Claude Code for conflict resolution..."
-    PROMPT_FILE=$(mktemp)
-    echo "$AI_PROMPT" > "$PROMPT_FILE"
-    if claude "$PROMPT_FILE"; then
+    if echo "$AI_PROMPT" | claude; then
         RESOLVED=true
         log "Claude Code resolved conflicts successfully"
     else
         warn "Claude Code resolution failed, trying next tool..."
     fi
-    rm -f "$PROMPT_FILE"
 fi
 
 if command -v codex &> /dev/null && [[ "$RESOLVED" == false ]]; then
