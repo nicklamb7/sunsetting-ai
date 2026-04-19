@@ -95,14 +95,37 @@ run_pnpm() {
     return 127
 }
 
+sync_workspace_install_if_needed() {
+    local install_log="$CONFLICT_DIR/pnpm-install-$(date +'%Y%m%d-%H%M%S').log"
+    warn "Build validation indicates the installed workspace graph is stale. Running a locked pnpm install before retrying build..."
+    if run_pnpm install --frozen-lockfile 2>&1 | tee -a "$install_log"; then
+        log "Locked install completed successfully."
+        return 0
+    fi
+
+    error "Locked install failed. See $install_log for details."
+    return 1
+}
+
 verify_build() {
     log "Verifying build after sync..."
-    if run_pnpm build; then
+    local build_log="$CONFLICT_DIR/build-verify-$(date +'%Y%m%d-%H%M%S').log"
+    if run_pnpm build 2>&1 | tee -a "$build_log"; then
         log "✅ Build successful!"
         return 0
     fi
 
-    error "Build failed after sync. Manual review needed."
+    if grep -q "Run `pnpm install` and rebuild from a trusted workspace checkout" "$build_log"; then
+        if sync_workspace_install_if_needed; then
+            log "Retrying build after locked install..."
+            if run_pnpm build 2>&1 | tee -a "$build_log"; then
+                log "✅ Build successful after locked install!"
+                return 0
+            fi
+        fi
+    fi
+
+    error "Build failed after sync. Manual review needed. See $build_log for details."
     return 1
 }
 
