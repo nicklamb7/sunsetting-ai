@@ -1,11 +1,11 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 ###############################################################################
 # Sunsetting AI - Automated Upstream Sync Script
 #
 # This script syncs the latest OpenClaw changes into the Sunsetting fork
-# and uses Claude Code to resolve any merge conflicts automatically.
+# and uses Claude Code / Codex to resolve any merge conflicts automatically.
 #
 # Usage:
 #   ./scripts/sync-upstream.sh          # Interactive mode
@@ -16,6 +16,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 LOG_FILE="$REPO_ROOT/sync-upstream.log"
 CONFLICT_DIR="$REPO_ROOT/.sync-conflicts"
+AUTO_MODE=false
+[[ "${1:-}" == "--auto" ]] && AUTO_MODE=true
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -33,6 +35,60 @@ warn() {
 
 error() {
     echo -e "${RED}[$(date +'%Y-%m-%d %H:%M:%S')] ERROR:${NC} $1" | tee -a "$LOG_FILE"
+}
+
+cleanup_on_failure() {
+    local exit_code=$?
+    if [[ $exit_code -eq 0 ]]; then
+        return 0
+    fi
+
+    if git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+        if [[ -d "$REPO_ROOT/.git/rebase-merge" || -d "$REPO_ROOT/.git/rebase-apply" ]]; then
+            warn "Failure occurred during rebase. Aborting rebase to leave repo in a clean state..."
+            git -C "$REPO_ROOT" rebase --abort || true
+        fi
+    fi
+
+    return "$exit_code"
+}
+trap cleanup_on_failure EXIT
+
+is_rebase_in_progress() {
+    [[ -d "$REPO_ROOT/.git/rebase-merge" || -d "$REPO_ROOT/.git/rebase-apply" ]]
+}
+
+continue_rebase_until_done() {
+    while is_rebase_in_progress; do
+        local conflicted_files
+        conflicted_files=$(git diff --name-only --diff-filter=U || true)
+        if [[ -n "$conflicted_files" ]]; then
+            warn "Rebase still has unresolved conflicts:"
+            echo "$conflicted_files" | while read -r file; do
+                [[ -n "$file" ]] && warn "  - $file"
+            done
+            return 1
+        fi
+
+        if git rebase --continue; then
+            log "Advanced rebase to the next step."
+        else
+            warn "git rebase --continue reported a problem. Checking whether Git is asking for an editor..."
+            GIT_EDITOR=true git rebase --continue || return 1
+        fi
+    done
+    return 0
+}
+
+verify_build() {
+    log "Verifying build after sync..."
+    if pnpm build; then
+        log "✅ Build successful!"
+        return 0
+    fi
+
+    error "Build failed after sync. Manual review needed."
+    return 1
 }
 
 ###############################################################################
@@ -60,6 +116,11 @@ if [[ "$CURRENT_BRANCH" != "main" ]]; then
     git checkout main
 fi
 
+if ! git remote get-url upstream >/dev/null 2>&1; then
+    error "Git remote 'upstream' is not configured. Add it before running sync-upstream.sh."
+    exit 1
+fi
+
 ###############################################################################
 # 2. Fetch upstream changes
 ###############################################################################
@@ -72,6 +133,7 @@ BEHIND_COUNT=$(git rev-list --count HEAD..upstream/main)
 
 if [[ "$BEHIND_COUNT" -eq 0 ]]; then
     log "Already up to date with upstream. No sync needed."
+    trap - EXIT
     exit 0
 fi
 
@@ -94,36 +156,33 @@ log "Attempting to rebase onto upstream/main..."
 if git rebase upstream/main; then
     log "✅ Rebase successful! No conflicts."
 
-    # Clean up old backup branches (keep last 10)
     log "Cleaning up old backup branches..."
     git branch | grep "backup/pre-sync-" | sort -r | tail -n +11 | xargs -r git branch -D || true
 
+    verify_build
     log "Sync complete!"
+    trap - EXIT
     exit 0
 else
-    warn "⚠️  Rebase encountered conflicts. Initiating AI-assisted resolution..."
+    warn "⚠️  Rebase encountered conflicts. Initiating conflict-resolution flow..."
 fi
 
 ###############################################################################
-# 5. Handle conflicts with Claude Code
+# 5. Capture conflict information
 ###############################################################################
 
-# Get list of conflicted files
-CONFLICTED_FILES=$(git diff --name-only --diff-filter=U)
+CONFLICTED_FILES=$(git diff --name-only --diff-filter=U || true)
 
 if [[ -z "$CONFLICTED_FILES" ]]; then
-    error "Rebase failed but no conflicts found. Manual intervention required."
-    git rebase --abort
-    git checkout "$BACKUP_BRANCH"
+    error "Rebase failed but no conflicts were found. Manual intervention required."
     exit 1
 fi
 
 log "Conflicted files:"
 echo "$CONFLICTED_FILES" | while read -r file; do
-    log "  - $file"
+    [[ -n "$file" ]] && log "  - $file"
 done
 
-# Save conflict information
 mkdir -p "$CONFLICT_DIR"
 CONFLICT_REPORT="$CONFLICT_DIR/conflict-report-$(date +'%Y%m%d-%H%M%S').md"
 
@@ -131,7 +190,7 @@ cat > "$CONFLICT_REPORT" << EOF
 # Upstream Sync Conflict Report
 Date: $(date)
 Upstream commits: $BEHIND_COUNT new commits
-Conflicted files: $(echo "$CONFLICTED_FILES" | wc -l)
+Conflicted files: $(echo "$CONFLICTED_FILES" | sed '/^$/d' | wc -l)
 
 ## Conflicted Files
 $CONFLICTED_FILES
@@ -140,9 +199,7 @@ $CONFLICTED_FILES
 
 EOF
 
-# Append git status to report
 git status >> "$CONFLICT_REPORT"
-
 log "Conflict report saved: $CONFLICT_REPORT"
 
 ###############################################################################
@@ -151,36 +208,24 @@ log "Conflict report saved: $CONFLICT_REPORT"
 
 log "Checking for auto-resolvable conflicts..."
 
-# Auto-resolve .bundle.hash conflicts (always take upstream)
 if echo "$CONFLICTED_FILES" | grep -q "^src/canvas-host/a2ui/.bundle.hash$"; then
     log "Auto-resolving .bundle.hash (generated file, taking upstream version)..."
     git checkout --theirs src/canvas-host/a2ui/.bundle.hash
     git add src/canvas-host/a2ui/.bundle.hash
-
-    # Remove from conflicted files list
-    CONFLICTED_FILES=$(echo "$CONFLICTED_FILES" | grep -v "^src/canvas-host/a2ui/.bundle.hash$")
+    CONFLICTED_FILES=$(echo "$CONFLICTED_FILES" | grep -v "^src/canvas-host/a2ui/.bundle.hash$" || true)
 fi
 
-# If all conflicts resolved, continue rebase
-if [[ -z "$CONFLICTED_FILES" ]]; then
-    log "All conflicts auto-resolved! Continuing rebase..."
-    if git rebase --continue; then
+if [[ -z "$(echo "$CONFLICTED_FILES" | sed '/^$/d')" ]]; then
+    log "All current conflicts auto-resolved. Continuing rebase..."
+    if continue_rebase_until_done; then
         log "✅ Rebase successful after auto-resolution!"
-
-        # Verify build works
-        log "Verifying build after conflict resolution..."
-        if pnpm build; then
-            log "✅ Build successful!"
-            log "Sync complete!"
-            exit 0
-        else
-            error "Build failed after conflict resolution."
-            exit 1
-        fi
-    else
-        error "Rebase --continue failed."
-        exit 1
+        verify_build
+        log "Sync complete!"
+        trap - EXIT
+        exit 0
     fi
+    error "Auto-resolution finished, but the rebase could not be completed cleanly."
+    exit 1
 fi
 
 ###############################################################################
@@ -188,17 +233,8 @@ fi
 ###############################################################################
 
 log "Attempting AI-assisted conflict resolution..."
-
-# Check if we're in automated mode
-AUTO_MODE=false
-if [[ "$1" == "--auto" ]]; then
-    AUTO_MODE=true
-fi
-
-# Always try AI resolution first (both manual and auto modes)
 log "Running AI agent to resolve conflicts..."
 
-# Create prompt for AI
 AI_PROMPT="The upstream OpenClaw repository has $BEHIND_COUNT new commits that conflict with our Sunsetting AI customizations.
 
 Conflicted files:
@@ -219,12 +255,11 @@ Please resolve these merge conflicts by:
 
 Report back with a summary of changes made."
 
-# Try AI tools in order of preference: Claude Code → Codex → OpenClaw CLI
 RESOLVED=false
 
 if command -v claude &> /dev/null && [[ "$RESOLVED" == false ]]; then
     log "Using Claude Code for conflict resolution..."
-    if echo "$AI_PROMPT" | claude; then
+    if echo "$AI_PROMPT" | claude --permission-mode bypassPermissions --print; then
         RESOLVED=true
         log "Claude Code resolved conflicts successfully"
     else
@@ -234,7 +269,7 @@ fi
 
 if command -v codex &> /dev/null && [[ "$RESOLVED" == false ]]; then
     log "Using Codex for conflict resolution..."
-    if echo "$AI_PROMPT" | codex; then
+    if codex exec "$AI_PROMPT"; then
         RESOLVED=true
         log "Codex resolved conflicts successfully"
     else
@@ -242,11 +277,10 @@ if command -v codex &> /dev/null && [[ "$RESOLVED" == false ]]; then
     fi
 fi
 
-if [[ -f "./openclaw.mjs" ]] && [[ "$RESOLVED" == false ]]; then
+if [[ -f "./openclaw.mjs" && "$RESOLVED" == false ]]; then
     log "Using OpenClaw agent for conflict resolution..."
     PROMPT_FILE=$(mktemp)
     echo "$AI_PROMPT" > "$PROMPT_FILE"
-    # Ensure we use Node 22 for OpenClaw CLI
     if source ~/.nvm/nvm.sh && nvm use 22 &> /dev/null && ./openclaw.mjs message send --file "$PROMPT_FILE" --agent default --thinking high; then
         RESOLVED=true
         log "OpenClaw agent resolved conflicts successfully"
@@ -278,35 +312,32 @@ if [[ "$RESOLVED" == false ]]; then
 fi
 
 ###############################################################################
-# 8. Verify resolution
+# 8. Verify resolution and complete rebase
 ###############################################################################
 
-# Check if rebase is still in progress
-if [[ -d "$REPO_ROOT/.git/rebase-merge" ]] || [[ -d "$REPO_ROOT/.git/rebase-apply" ]]; then
-    warn "Rebase still in progress. AI resolution may not have completed."
+if continue_rebase_until_done; then
+    log "✅ Rebase successful after AI-assisted conflict resolution!"
+else
+    error "AI conflict resolution ran, but the rebase is still incomplete or conflicts remain."
     exit 1
 fi
 
-# Verify build works
-log "Verifying build after conflict resolution..."
-if pnpm build; then
-    log "✅ Build successful after AI-assisted conflict resolution!"
-    log "Sync complete!"
-else
-    error "Build failed after conflict resolution. Manual review needed."
-    exit 1
-fi
+verify_build
 
 ###############################################################################
 # 9. Summary
 ###############################################################################
 
+log "Cleaning up old backup branches..."
+git branch | grep "backup/pre-sync-" | sort -r | tail -n +11 | xargs -r git branch -D || true
+
 log "========================================="
 log "Sync Summary:"
 log "  Upstream commits merged: $BEHIND_COUNT"
-log "  Conflicts resolved: $(echo "$CONFLICTED_FILES" | wc -l)"
 log "  Backup branch: $BACKUP_BRANCH"
 log "  Build status: PASSED"
 log "========================================="
+log "Sync complete!"
 
+trap - EXIT
 exit 0
