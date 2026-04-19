@@ -80,9 +80,24 @@ continue_rebase_until_done() {
     return 0
 }
 
+run_pnpm() {
+    if command -v pnpm >/dev/null 2>&1; then
+        pnpm "$@"
+        return $?
+    fi
+
+    if command -v corepack >/dev/null 2>&1; then
+        corepack pnpm "$@"
+        return $?
+    fi
+
+    error "Neither pnpm nor corepack is available in PATH."
+    return 127
+}
+
 verify_build() {
     log "Verifying build after sync..."
-    if pnpm build; then
+    if run_pnpm build; then
         log "✅ Build successful!"
         return 0
     fi
@@ -251,7 +266,7 @@ Please resolve these merge conflicts by:
 5. Remove all conflict markers (<<<<<<, =======, >>>>>>>)
 6. Mark conflicts as resolved with: git add <resolved-files>
 7. Continue the rebase with: git rebase --continue
-8. Verify the build works: pnpm build
+8. Verify the build works: use `pnpm build` if available, otherwise `corepack pnpm build`
 
 Report back with a summary of changes made."
 
@@ -303,7 +318,7 @@ if [[ "$RESOLVED" == false ]]; then
     echo "After resolving conflicts, run:"
     echo "  git add <resolved-files>"
     echo "  git rebase --continue"
-    echo "  pnpm build  # verify it works"
+    echo "  pnpm build  # or: corepack pnpm build"
     echo ""
     echo "Or to abort the rebase:"
     echo "  git rebase --abort"
