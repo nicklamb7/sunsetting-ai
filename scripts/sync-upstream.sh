@@ -67,17 +67,65 @@ continue_rebase_until_done() {
             echo "$conflicted_files" | while read -r file; do
                 [[ -n "$file" ]] && warn "  - $file"
             done
-            return 1
+            return 2
         fi
 
         if git rebase --continue; then
             log "Advanced rebase to the next step."
-        else
-            warn "git rebase --continue reported a problem. Checking whether Git is asking for an editor..."
-            GIT_EDITOR=true git rebase --continue || return 1
+            continue
         fi
+
+        warn "git rebase --continue reported a problem. Checking whether Git is asking for an editor..."
+        if GIT_EDITOR=true git rebase --continue; then
+            log "Advanced rebase to the next step."
+            continue
+        fi
+
+        conflicted_files=$(git diff --name-only --diff-filter=U || true)
+        if [[ -n "$conflicted_files" ]]; then
+            warn "New conflicts appeared after rebase continue. Handing off to conflict-resolution flow."
+            echo "$conflicted_files" | while read -r file; do
+                [[ -n "$file" ]] && warn "  - $file"
+            done
+            return 2
+        fi
+
+        return 1
     done
     return 0
+}
+
+capture_conflict_state() {
+    CONFLICTED_FILES=$(git diff --name-only --diff-filter=U || true)
+
+    if [[ -z "$CONFLICTED_FILES" ]]; then
+        error "Rebase failed but no conflicts were found. Manual intervention required."
+        exit 1
+    fi
+
+    log "Conflicted files:"
+    echo "$CONFLICTED_FILES" | while read -r file; do
+        [[ -n "$file" ]] && log "  - $file"
+    done
+
+    mkdir -p "$CONFLICT_DIR"
+    CONFLICT_REPORT="$CONFLICT_DIR/conflict-report-$(date +'%Y%m%d-%H%M%S').md"
+
+    cat > "$CONFLICT_REPORT" << EOF
+# Upstream Sync Conflict Report
+Date: $(date)
+Upstream commits: $BEHIND_COUNT new commits
+Conflicted files: $(echo "$CONFLICTED_FILES" | sed '/^$/d' | wc -l)
+
+## Conflicted Files
+$CONFLICTED_FILES
+
+## Conflict Details
+
+EOF
+
+    git status >> "$CONFLICT_REPORT"
+    log "Conflict report saved: $CONFLICT_REPORT"
 }
 
 run_pnpm() {
@@ -209,36 +257,7 @@ fi
 # 5. Capture conflict information
 ###############################################################################
 
-CONFLICTED_FILES=$(git diff --name-only --diff-filter=U || true)
-
-if [[ -z "$CONFLICTED_FILES" ]]; then
-    error "Rebase failed but no conflicts were found. Manual intervention required."
-    exit 1
-fi
-
-log "Conflicted files:"
-echo "$CONFLICTED_FILES" | while read -r file; do
-    [[ -n "$file" ]] && log "  - $file"
-done
-
-mkdir -p "$CONFLICT_DIR"
-CONFLICT_REPORT="$CONFLICT_DIR/conflict-report-$(date +'%Y%m%d-%H%M%S').md"
-
-cat > "$CONFLICT_REPORT" << EOF
-# Upstream Sync Conflict Report
-Date: $(date)
-Upstream commits: $BEHIND_COUNT new commits
-Conflicted files: $(echo "$CONFLICTED_FILES" | sed '/^$/d' | wc -l)
-
-## Conflicted Files
-$CONFLICTED_FILES
-
-## Conflict Details
-
-EOF
-
-git status >> "$CONFLICT_REPORT"
-log "Conflict report saved: $CONFLICT_REPORT"
+capture_conflict_state
 
 ###############################################################################
 # 6. Automatic Resolution for Known Safe Conflicts
@@ -255,15 +274,22 @@ fi
 
 if [[ -z "$(echo "$CONFLICTED_FILES" | sed '/^$/d')" ]]; then
     log "All current conflicts auto-resolved. Continuing rebase..."
-    if continue_rebase_until_done; then
+    continue_rebase_until_done
+    continue_status=$?
+    if [[ $continue_status -eq 0 ]]; then
         log "✅ Rebase successful after auto-resolution!"
         verify_build
         log "Sync complete!"
         trap - EXIT
         exit 0
     fi
-    error "Auto-resolution finished, but the rebase could not be completed cleanly."
-    exit 1
+    if [[ $continue_status -eq 2 ]]; then
+        capture_conflict_state
+        warn "Auto-resolution surfaced additional conflicts. Escalating into AI-assisted conflict resolution."
+    else
+        error "Auto-resolution finished, but the rebase could not be completed cleanly."
+        exit 1
+    fi
 fi
 
 ###############################################################################
