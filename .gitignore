@@ -154,3 +154,4 @@ extensions/qa-lab/web/dist/
 # Sunsetting AI fork artifacts
 sync-upstream.log
 .sync-conflicts/
+src/canvas-host/a2ui/.bundle.hash
