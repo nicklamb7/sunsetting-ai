@@ -114,7 +114,6 @@ import {
   updateSkillEdit,
   updateSkillEnabled,
 } from "./controllers/skills.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import "./components/dashboard-header.ts";
 import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
@@ -881,17 +880,6 @@ export function renderApp(state: AppViewState) {
             <dashboard-header .tab=${state.tab}></dashboard-header>
           </div>
           <div class="topnav-shell__actions">
-            <button
-              class="topbar-search"
-              @click=${() => {
-                state.paletteOpen = !state.paletteOpen;
-              }}
-              title="Search or jump to… (⌘K)"
-              aria-label="Open command palette"
-            >
-              <span class="topbar-search__label">${t("common.search")}</span>
-              <kbd class="topbar-search__kbd">⌘K</kbd>
-            </button>
             <div class="topbar-status">
               ${isChat ? renderChatMobileToggle(state) : nothing}
               ${renderTopbarThemeModeToggle(state)}
@@ -913,7 +901,6 @@ export function renderApp(state: AppViewState) {
                         alt="Sunsetting AI"
                       />
                       <span class="sidebar-brand__copy">
-                        <span class="sidebar-brand__eyebrow">${t("nav.control")}</span>
                         <span class="sidebar-brand__title">Sunsetting AI</span>
                       </span>
                     `}
@@ -936,7 +923,27 @@ export function renderApp(state: AppViewState) {
             </div>
             <div class="sidebar-shell__body">
               <nav class="sidebar-nav">
-                ${TAB_GROUPS.map((group) => {
+                <section class="nav-section">
+                  <div class="nav-section__items">
+                    <button
+                      type="button"
+                      class="nav-item sidebar-search-trigger"
+                      @click=${() => {
+                        state.paletteOpen = !state.paletteOpen;
+                      }}
+                      title="Search or jump to… (⌘K)"
+                      aria-label="Open command palette"
+                    >
+                      <span class="nav-item__icon" aria-hidden="true">${icons.search}</span>
+                      <span class="nav-item__text">${t("common.search")}</span>
+                      ${navCollapsed
+                        ? nothing
+                        : html`<kbd class="sidebar-search-trigger__kbd">⌘K</kbd>`}
+                    </button>
+                    ${renderTab(state, "chat", { collapsed: navCollapsed })}
+                  </div>
+                </section>
+                ${TAB_GROUPS.filter((group) => !group.tabs.includes("chat")).map((group) => {
                   const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
                   const hasActiveTab = group.tabs.some((tab) => tab === state.tab);
                   const showItems = navCollapsed || hasActiveTab || !isGroupCollapsed;
@@ -976,21 +983,6 @@ export function renderApp(state: AppViewState) {
             </div>
             <div class="sidebar-shell__footer">
               <div class="sidebar-utility-group">
-                <a
-                  class="nav-item nav-item--external sidebar-utility-link"
-                  href="https://docs.openclaw.ai"
-                  target=${EXTERNAL_LINK_TARGET}
-                  rel=${buildExternalLinkRel()}
-                  title="${t("common.docs")} (opens in new tab)"
-                >
-                  <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
-                  ${!navCollapsed
-                    ? html`
-                        <span class="nav-item__text">${t("common.docs")}</span>
-                        <span class="nav-item__external-icon">${icons.externalLink}</span>
-                      `
-                    : nothing}
-                </a>
                 <div class="sidebar-mode-switch">${renderTopbarThemeModeToggle(state)}</div>
                 ${(() => {
                   const version = state.hello?.server?.version ?? "";
