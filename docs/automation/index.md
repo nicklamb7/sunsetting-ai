@@ -103,6 +103,7 @@ See [Heartbeat](/gateway/heartbeat).
 - **Standing orders** give the agent persistent context and authority boundaries.
 - **Task Flow** coordinates multi-step flows above individual tasks.
 - **Tasks** automatically track all detached work so you can inspect and audit it.
+- **Managed-fork readiness surfaces** can sit on top of cron-driven sync workflows to tell operators whether new implementation is safe to start.
 
 ## Related
 
@@ -112,4 +113,5 @@ See [Heartbeat](/gateway/heartbeat).
 - [Hooks](/automation/hooks) — event-driven lifecycle scripts
 - [Standing Orders](/automation/standing-orders) — persistent agent instructions
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
+- [Sunsetting Upstream Readiness Surface](/automation/sunsetting-upstream-readiness-surface) — thin readiness contract for the Sunsetting managed fork
 - [Configuration Reference](/gateway/configuration-reference) — all config keys
