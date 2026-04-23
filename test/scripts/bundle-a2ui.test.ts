@@ -9,6 +9,18 @@ import {
 } from "../../scripts/bundle-a2ui.mjs";
 
 describe("scripts/bundle-a2ui.mjs", () => {
+  it("treats the generated source bundle as out-of-band runtime output", () => {
+    const repoRoot = path.resolve("repo-root");
+    const inputPaths = getBundleHashRepoInputPaths(repoRoot);
+
+    expect(inputPaths).not.toContain(
+      path.join(repoRoot, "src", "canvas-host", "a2ui", "a2ui.bundle.js"),
+    );
+    expect(inputPaths).not.toContain(
+      path.join(repoRoot, "src", "canvas-host", "a2ui", ".bundle.hash"),
+    );
+  });
+
   it("keeps generated renderer output out of bundle hash inputs", () => {
     const repoRoot = path.resolve("repo-root");
 

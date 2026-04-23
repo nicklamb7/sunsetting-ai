@@ -54,6 +54,47 @@ cleanup_on_failure() {
 }
 trap cleanup_on_failure EXIT
 
+GENERATED_SYNC_PATHS=(
+    "src/canvas-host/a2ui/.bundle.hash"
+    "src/canvas-host/a2ui/a2ui.bundle.js"
+)
+
+join_by() {
+    local separator="$1"
+    shift
+    local first=true
+    for item in "$@"; do
+        if [[ "$first" == true ]]; then
+            printf '%s' "$item"
+            first=false
+        else
+            printf '%s%s' "$separator" "$item"
+        fi
+    done
+}
+
+generated_sync_status() {
+    git status --porcelain -- "${GENERATED_SYNC_PATHS[@]}" 2>/dev/null || true
+}
+
+has_only_generated_sync_drift() {
+    local full_status generated_status
+    full_status=$(git status --porcelain)
+    if [[ -z "$full_status" ]]; then
+        return 1
+    fi
+
+    generated_status=$(generated_sync_status)
+    if [[ -z "$generated_status" ]]; then
+        return 1
+    fi
+
+    local full_count generated_count
+    full_count=$(printf '%s\n' "$full_status" | sed '/^$/d' | wc -l)
+    generated_count=$(printf '%s\n' "$generated_status" | sed '/^$/d' | wc -l)
+    [[ "$full_count" -eq "$generated_count" ]]
+}
+
 is_rebase_in_progress() {
     [[ -d "$REPO_ROOT/.git/rebase-merge" || -d "$REPO_ROOT/.git/rebase-apply" ]]
 }
@@ -188,9 +229,14 @@ log "Repository: $(pwd)"
 
 # Check if we're on a clean working tree
 if [[ -n $(git status --porcelain) ]]; then
-    error "Working directory is not clean. Please commit or stash changes first."
-    git status --short
-    exit 1
+    if has_only_generated_sync_drift; then
+        warn "Working tree has only generated A2UI drift. Resetting generated sync paths before continuing..."
+        git restore --source=HEAD --staged --worktree -- "${GENERATED_SYNC_PATHS[@]}"
+    else
+        error "Working directory is not clean. Please commit or stash changes first."
+        git status --short
+        exit 1
+    fi
 fi
 
 # Check current branch
@@ -265,12 +311,14 @@ capture_conflict_state
 
 log "Checking for auto-resolvable conflicts..."
 
-if echo "$CONFLICTED_FILES" | grep -q "^src/canvas-host/a2ui/.bundle.hash$"; then
-    log "Auto-resolving .bundle.hash (generated file, taking upstream version)..."
-    git checkout --theirs src/canvas-host/a2ui/.bundle.hash
-    git add src/canvas-host/a2ui/.bundle.hash
-    CONFLICTED_FILES=$(echo "$CONFLICTED_FILES" | grep -v "^src/canvas-host/a2ui/.bundle.hash$" || true)
-fi
+for generated_path in "${GENERATED_SYNC_PATHS[@]}"; do
+    if echo "$CONFLICTED_FILES" | grep -q "^${generated_path}$"; then
+        log "Auto-resolving $(basename "$generated_path") (generated file, taking upstream version)..."
+        git checkout --theirs -- "$generated_path"
+        git add -- "$generated_path"
+        CONFLICTED_FILES=$(echo "$CONFLICTED_FILES" | grep -v "^${generated_path}$" || true)
+    fi
+done
 
 if [[ -z "$(echo "$CONFLICTED_FILES" | sed '/^$/d')" ]]; then
     log "All current conflicts auto-resolved. Continuing rebase..."
